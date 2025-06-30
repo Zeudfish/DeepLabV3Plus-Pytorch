@@ -24,9 +24,9 @@ def get_argparser():
     parser = argparse.ArgumentParser()
 
     # Datset Options
-    parser.add_argument("--data_root", type=str, default='./datasets/data',
+    parser.add_argument("--data_root", type=str, default='/mnt/nvme2/PUBLIC/zfy/ainr-c3-noisemap/dataset/CityScapes',
                         help="path to Dataset")
-    parser.add_argument("--dataset", type=str, default='voc',
+    parser.add_argument("--dataset", type=str, default='cityscapes',
                         choices=['voc', 'cityscapes'], help='Name of dataset')
     parser.add_argument("--num_classes", type=int, default=None,
                         help="num classes (default: None)")
@@ -36,7 +36,7 @@ def get_argparser():
                               not (name.startswith("__") or name.startswith('_')) and callable(
                               network.modeling.__dict__[name])
                               )
-    parser.add_argument("--model", type=str, default='deeplabv3plus_mobilenet',
+    parser.add_argument("--model", type=str, default='deeplabv3_resnet101',
                         choices=available_models, help='model name')
     parser.add_argument("--separable_conv", action='store_true', default=False,
                         help="apply separable conv to decoder and aspp")
@@ -55,11 +55,11 @@ def get_argparser():
     parser.add_argument("--step_size", type=int, default=10000)
     parser.add_argument("--crop_val", action='store_true', default=False,
                         help='crop validation (default: False)')
-    parser.add_argument("--batch_size", type=int, default=16,
+    parser.add_argument("--batch_size", type=int, default=2,
                         help='batch size (default: 16)')
     parser.add_argument("--val_batch_size", type=int, default=4,
                         help='batch size for validation (default: 4)')
-    parser.add_argument("--crop_size", type=int, default=513)
+    parser.add_argument("--crop_size", type=int, default=768)
 
     parser.add_argument("--ckpt", default=None, type=str,
                         help="restore from checkpoint")
@@ -93,6 +93,13 @@ def get_argparser():
                         help='env for visdom')
     parser.add_argument("--vis_num_samples", type=int, default=8,
                         help='number of samples for visualization (default: 8)')
+
+    parser.add_argument("--use_infopro", action='store_true', default=True,
+                        help="use InfoPro training")
+    parser.add_argument("--loss_recons", type=float, default=0.5,
+                        help="reconstruction loss weight")
+    parser.add_argument("--loss_task", type=float, default=1.0,
+                        help="task loss weight")
     return parser
 
 
@@ -215,6 +222,14 @@ def main():
     elif opts.dataset.lower() == 'cityscapes':
         opts.num_classes = 19
 
+    info_pro_param = None
+    if opts.use_infopro:
+        info_pro_param = {
+            'loss_recons': opts.loss_recons,
+            'loss_task': opts.loss_task
+        }
+
+
     # Setup visualization
     vis = Visualizer(port=opts.vis_port,
                      env=opts.vis_env) if opts.enable_vis else None
@@ -242,9 +257,20 @@ def main():
         val_dst, batch_size=opts.val_batch_size, shuffle=True, num_workers=2)
     print("Dataset: %s, Train set: %d, Val set: %d" %
           (opts.dataset, len(train_dst), len(val_dst)))
+    if info_pro_param is not None:
+        model = network.modeling.__dict__[opts.model](
+            num_classes=opts.num_classes, 
+            output_stride=opts.output_stride,
+            info_pro_param=info_pro_param
+        )
+    else:
+        model = network.modeling.__dict__[opts.model](
+            num_classes=opts.num_classes, 
+            output_stride=opts.output_stride
+        )
 
     # Set up model (all models are 'constructed at network.modeling)
-    model = network.modeling.__dict__[opts.model](num_classes=opts.num_classes, output_stride=opts.output_stride)
+    # model = network.modeling.__dict__[opts.model](num_classes=opts.num_classes, output_stride=opts.output_stride)
     if opts.separable_conv and 'plus' in opts.model:
         network.convert_to_separable_conv(model.classifier)
     utils.set_bn_momentum(model.backbone, momentum=0.01)
@@ -320,20 +346,87 @@ def main():
         return
 
     interval_loss = 0
-    while True:  # cur_itrs < opts.total_itrs:
-        # =====  Train  =====
+    while True:
         model.train()
         cur_epochs += 1
         for (images, labels) in train_loader:
             cur_itrs += 1
-
             images = images.to(device, dtype=torch.float32)
             labels = labels.to(device, dtype=torch.long)
-
+            
             optimizer.zero_grad()
-            outputs = model(images)
-            loss = criterion(outputs, labels)
-            loss.backward()
+            
+            if opts.use_infopro:
+                try:
+                    # 设置InfoPro训练模式
+                    if hasattr(model, 'module'):
+                        # DataParallel情况
+                        model.module.set_infopro_training(True)
+                        model.module._labels = labels
+                    else:
+                        # 单GPU情况
+                        model.set_infopro_training(True)
+                        model._labels = labels
+                    
+                    # 前向传播
+                    outputs = model(images)
+                    
+                    # 获取InfoPro损失
+                    if hasattr(model, 'module'):
+                        info_losses = model.module.get_info_losses()
+                    else:
+                        info_losses = model.get_info_losses()
+                    
+                    # 计算主损失
+                    loss = criterion(outputs, labels)
+                    
+                    # 如果有InfoPro损失，先反向传播
+                    if info_losses and 'loss_inter' in info_losses:
+                        info_losses['loss_inter'].backward(retain_graph=True)
+                        
+                        # 记录损失
+                        if (cur_itrs) % 10 == 0:
+                            print(f"Epoch {cur_epochs}, Iter {cur_itrs}/{opts.total_itrs}, "
+                                  f"Loss={loss.item():.4f}, "
+                                  f"Task_Loss={info_losses['loss_task'].item():.4f}, "
+                                  f"Recons_Loss={info_losses['loss_recons'].item():.4f}")
+                    else:
+                        # 没有InfoPro损失，正常记录
+                        if (cur_itrs) % 10 == 0:
+                            print(f"Epoch {cur_epochs}, Iter {cur_itrs}/{opts.total_itrs}, "
+                                  f"Loss={loss.item():.4f}")
+                    
+                    # 反向传播主损失
+                    loss.backward()
+                    
+                except Exception as e:
+                    print(f"InfoPro training error: {e}")
+                    print("Falling back to normal training...")
+                    
+                    # 回退到正常训练
+                    outputs = model(images)
+                    loss = criterion(outputs, labels)
+                    loss.backward()
+                finally:
+                    # 清理临时标签
+                    if hasattr(model, 'module'):
+                        if hasattr(model.module, '_labels'):
+                            delattr(model.module, '_labels')
+                        model.module.set_infopro_training(False)
+                    else:
+                        if hasattr(model, '_labels'):
+                            delattr(model, '_labels')
+                        model.set_infopro_training(False)
+            else:
+                # 正常训练
+                outputs = model(images)
+                loss = criterion(outputs, labels)
+                loss.backward()
+                
+                if (cur_itrs) % 10 == 0:
+                    print("Epoch %d, Itrs %d/%d, Loss=%f" %
+                          (cur_epochs, cur_itrs, opts.total_itrs, loss.item()))
+            
             optimizer.step()
 
             np_loss = loss.detach().cpu().numpy()
