@@ -4,7 +4,7 @@ try: # for torchvision<0.4
     from torchvision.models.utils import load_state_dict_from_url
 except: # for torchvision>=0.4
     from torch.hub import load_state_dict_from_url
-
+from collections import OrderedDict
 
 __all__ = ['ResNet', 'resnet18', 'resnet34', 'resnet50', 'resnet101',
            'resnet152', 'resnext50_32x4d', 'resnext101_32x8d',
@@ -212,6 +212,46 @@ class ResNet(nn.Module):
 
         return x
 
+def forward_train1(self, x):
+    """InfoPro第一部分前向传播"""
+    if self.deep_stem:
+        x = self.stem(x)
+    else:
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+    x = self.maxpool(x)
+    
+    x = self.layer1(x)
+    x = self.layer2(x)
+    
+    # 对于ResNet-101，layer3有23个block
+    # 在中间位置分割（前13个blocks）
+    if hasattr(self.layer3, '__len__'):
+        for i in range(min(13, len(self.layer3))):
+            x = self.layer3[i](x)
+    else:
+        x = self.layer3(x)
+    
+    return x
+
+def forward_train2(self, x):
+    """InfoPro第二部分前向传播"""
+    # 继续剩余的layer3 blocks
+    if hasattr(self.layer3, '__len__') and len(self.layer3) > 13:
+        for i in range(13, len(self.layer3)):
+            x = self.layer3[i](x)
+    
+    x = self.layer4(x)
+    
+    # 返回特征字典，与正常forward保持一致
+    outs = OrderedDict()
+    outs['out'] = x
+    # 如果是DeepLabV3+，需要low_level特征
+    if hasattr(self, 'layer1_out'):
+        outs['low_level'] = self.layer1_out
+    
+    return outs
 
 def _resnet(arch, block, layers, pretrained, progress, **kwargs):
     model = ResNet(block, layers, **kwargs)
