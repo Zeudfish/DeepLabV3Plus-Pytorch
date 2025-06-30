@@ -118,98 +118,67 @@ class _SimpleSegmentationModel(nn.Module):
 
 class IntermediateLayerGetter(nn.ModuleDict):
     """
-    Module wrapper that returns intermediate layers from a model
-
-    It has a strong assumption that the modules have been registered
-    into the model in the same order as they are used.
-    This means that one should **not** reuse the same nn.Module
-    twice in the forward if you want this to work.
-
-    Additionally, it is only able to query submodules that are directly
-    assigned to the model. So if `model` is passed, `model.feature1` can
-    be returned, but not `model.feature1.layer2`.
-
-    Arguments:
-        model (nn.Module): model on which we will extract the features
-        return_layers (Dict[name, new_name]): a dict containing the names
-            of the modules for which the activations will be returned as
-            the key of the dict, and the value of the dict is the name
-            of the returned activation (which the user can specify).
-
-    Examples::
-
-        >>> m = torchvision.models.resnet18(pretrained=True)
-        >>> # extract layer1 and layer3, giving as names `feat1` and feat2`
-        >>> new_m = torchvision.models._utils.IntermediateLayerGetter(m,
-        >>>     {'layer1': 'feat1', 'layer3': 'feat2'})
-        >>> out = new_m(torch.rand(1, 3, 224, 224))
-        >>> print([(k, v.shape) for k, v in out.items()])
-        >>>     [('feat1', torch.Size([1, 64, 56, 56])),
-        >>>      ('feat2', torch.Size([1, 256, 14, 14]))]
+    返回骨干网络的中间特征，并在 InfoPro 训练模式下
+    调用 backbone 的 forward_train1 / forward_train2。
     """
-    def __init__(self, model, return_layers, hrnet_flag=False):
-        if not set(return_layers).issubset([name for name, _ in model.named_children()]):
+    def __init__(self, model, return_layers, hrnet_flag: bool = False):
+        # ---------- 检查 ----------
+        if not set(return_layers).issubset(name for name, _ in model.named_children()):
             raise ValueError("return_layers are not present in model")
 
         self.hrnet_flag = hrnet_flag
 
-        orig_return_layers = return_layers
-        return_layers = {k: v for k, v in return_layers.items()}
+        # ---------- 收集要保存的子层 ----------
         layers = OrderedDict()
+        remaining = dict(return_layers)          # copy
         for name, module in model.named_children():
             layers[name] = module
-            if name in return_layers:
-                del return_layers[name]
-            if not return_layers:
+            remaining.pop(name, None)
+            if not remaining:
                 break
 
-        super(IntermediateLayerGetter, self).__init__(layers)
-        self.return_layers = orig_return_layers
+        # 先调用父类构造函数，完成 Module 初始化
+        super().__init__(layers)
 
+        # 现在再保存对原始 backbone 的引用
+        self.orig_model = model
+        self.return_layers = return_layers       # {'layer4': 'out', ...}
+
+    # -------------------- 普通推理 --------------------
     def forward(self, x):
         out = OrderedDict()
-        for name, module in self.named_children():
-            if self.hrnet_flag and name.startswith('transition'): # if using hrnet, you need to take care of transition
-                if name == 'transition1': # in transition1, you need to split the module to two streams first
-                    x = [trans(x) for trans in module]
-                else: # all other transition is just an extra one stream split
+        for name, module in self.items():  # self.named_children() 也行
+            if self.hrnet_flag and name.startswith('transition'):
+                if name == 'transition1':
+                    x = [m(x) for m in module]
+                else:
                     x.append(module(x[-1]))
-            else: # other models (ex:resnet,mobilenet) are convolutions in series.
+            else:
                 x = module(x)
 
             if name in self.return_layers:
                 out_name = self.return_layers[name]
-                if name == 'stage4' and self.hrnet_flag: # In HRNetV2, we upsample and concat all outputs streams together
-                    output_h, output_w = x[0].size(2), x[0].size(3)  # Upsample to size of highest resolution stream
-                    x1 = F.interpolate(x[1], size=(output_h, output_w), mode='bilinear', align_corners=False)
-                    x2 = F.interpolate(x[2], size=(output_h, output_w), mode='bilinear', align_corners=False)
-                    x3 = F.interpolate(x[3], size=(output_h, output_w), mode='bilinear', align_corners=False)
-                    x = torch.cat([x[0], x1, x2, x3], dim=1)
-                    out[out_name] = x
-                else:
-                    out[out_name] = x
+                if self.hrnet_flag and name == 'stage4':          # HRNet cat
+                    h, w = x[0].shape[2:]
+                    ups = [F.interpolate(t, size=(h, w),
+                                          mode='bilinear',
+                                          align_corners=False)
+                           for t in x[1:]]
+                    x = torch.cat([x[0], *ups], dim=1)
+                out[out_name] = x
         return out
+
+    # -------------------- InfoPro 前半段 --------------------
     def forward_train1(self, x):
-        """InfoPro第一部分前向传播"""
-        # 检查第一个模块是否有forward_train1方法
-        first_module_name = list(self._modules.keys())[0]
-        first_module = self._modules[first_module_name]
-        
-        if hasattr(first_module, 'forward_train1'):
-            return first_module.forward_train1(x)
-        else:
-            raise NotImplementedError(f"Module {first_module_name} doesn't support forward_train1")
-    
+        if hasattr(self.orig_model, 'forward_train1'):
+            return self.orig_model.forward_train1(x)
+        raise NotImplementedError("Backbone does not implement forward_train1")
+
+    # -------------------- InfoPro 后半段 --------------------
     def forward_train2(self, x):
-        """InfoPro第二部分前向传播"""
-        first_module_name = list(self._modules.keys())[0]
-        first_module = self._modules[first_module_name]
-        
-        if hasattr(first_module, 'forward_train2'):
-            features = first_module.forward_train2(x)
-            # 转换为字典格式
-            if not isinstance(features, dict):
-                features = {'out': features}
-            return features
-        else:
-            raise NotImplementedError(f"Module {first_module_name} doesn't support forward_train2")
+        if hasattr(self.orig_model, 'forward_train2'):
+            feats = self.orig_model.forward_train2(x)
+            return feats if isinstance(feats, dict) else {'out': feats}
+        raise NotImplementedError("Backbone does not implement forward_train2")
+
+ 
