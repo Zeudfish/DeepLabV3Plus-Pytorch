@@ -29,7 +29,7 @@ def _segm_hrnet(name, backbone_name, num_classes, pretrained_backbone):
     model = DeepLabV3(backbone, classifier)
     return model
 
-def _segm_resnet(name, backbone_name, num_classes, output_stride, pretrained_backbone):
+def _segm_resnet(name, backbone_name, num_classes, output_stride, pretrained_backbone,info_pro_param=None):
 
     if output_stride==8:
         replace_stride_with_dilation=[False, True, True]
@@ -45,6 +45,10 @@ def _segm_resnet(name, backbone_name, num_classes, output_stride, pretrained_bac
     inplanes = 2048
     low_level_planes = 256
 
+    if info_pro_param is not None:
+        info_pro_param['num_classes'] = num_classes
+    
+
     if name=='deeplabv3plus':
         return_layers = {'layer4': 'out', 'layer1': 'low_level'}
         classifier = DeepLabHeadV3Plus(inplanes, low_level_planes, num_classes, aspp_dilate)
@@ -53,8 +57,11 @@ def _segm_resnet(name, backbone_name, num_classes, output_stride, pretrained_bac
         classifier = DeepLabHead(inplanes , num_classes, aspp_dilate)
     backbone = IntermediateLayerGetter(backbone, return_layers=return_layers)
 
-    model = DeepLabV3(backbone, classifier)
+    # model = DeepLabV3(backbone, classifier)
+
+    model = DeepLabV3(backbone, classifier, info_pro_param=info_pro_param)
     return model
+
 
 
 def _segm_xception(name, backbone_name, num_classes, output_stride, pretrained_backbone):
@@ -109,12 +116,12 @@ def _segm_mobilenet(name, backbone_name, num_classes, output_stride, pretrained_
     model = DeepLabV3(backbone, classifier)
     return model
 
-def _load_model(arch_type, backbone, num_classes, output_stride, pretrained_backbone):
+def _load_model(arch_type, backbone, num_classes, output_stride, pretrained_backbone,info_pro_param=None):
 
     if backbone=='mobilenetv2':
         model = _segm_mobilenet(arch_type, backbone, num_classes, output_stride=output_stride, pretrained_backbone=pretrained_backbone)
     elif backbone.startswith('resnet'):
-        model = _segm_resnet(arch_type, backbone, num_classes, output_stride=output_stride, pretrained_backbone=pretrained_backbone)
+        model = _segm_resnet(arch_type, backbone, num_classes, output_stride=output_stride, pretrained_backbone=pretrained_backbone,info_pro_param=None)
     elif backbone.startswith('hrnetv2'):
         model = _segm_hrnet(arch_type, backbone, num_classes, pretrained_backbone=pretrained_backbone)
     elif backbone=='xception':
@@ -141,7 +148,7 @@ def deeplabv3_resnet50(num_classes=21, output_stride=8, pretrained_backbone=True
     """
     return _load_model('deeplabv3', 'resnet50', num_classes, output_stride=output_stride, pretrained_backbone=pretrained_backbone)
 
-def deeplabv3_resnet101(num_classes=21, output_stride=8, pretrained_backbone=True):
+def deeplabv3_resnet101(num_classes=21, output_stride=8, pretrained_backbone=True,info_pro_param=None):
     """Constructs a DeepLabV3 model with a ResNet-101 backbone.
 
     Args:
@@ -149,7 +156,7 @@ def deeplabv3_resnet101(num_classes=21, output_stride=8, pretrained_backbone=Tru
         output_stride (int): output stride for deeplab.
         pretrained_backbone (bool): If True, use the pretrained backbone.
     """
-    return _load_model('deeplabv3', 'resnet101', num_classes, output_stride=output_stride, pretrained_backbone=pretrained_backbone)
+    return _load_model('deeplabv3', 'resnet101', num_classes, output_stride=output_stride, pretrained_backbone=pretrained_backbone,info_pro_param=info_pro_param)
 
 def deeplabv3_mobilenet(num_classes=21, output_stride=8, pretrained_backbone=True, **kwargs):
     """Constructs a DeepLabV3 model with a MobileNetv2 backbone.
