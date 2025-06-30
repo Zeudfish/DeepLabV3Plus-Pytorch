@@ -23,7 +23,10 @@ class DeepLabV3(_SimpleSegmentationModel):
             the backbone and returns a dense prediction.
         aux_classifier (nn.Module, optional): auxiliary classifier used during training
     """
-    pass
+    def __init__(self, backbone, classifier, aux_classifier=None, info_pro_param=None):
+        super(DeepLabV3, self).__init__(backbone, classifier, info_pro_param)
+        self.aux_classifier = aux_classifier
+
 
 class DeepLabHeadV3Plus(nn.Module):
     def __init__(self, in_channels, low_level_channels, num_classes, aspp_dilate=[12, 24, 36]):
