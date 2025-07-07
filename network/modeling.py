@@ -138,7 +138,7 @@ def deeplabv3_hrnetv2_48(num_classes=21, output_stride=4, pretrained_backbone=Fa
 def deeplabv3_hrnetv2_32(num_classes=21, output_stride=4, pretrained_backbone=True):
     return _load_model('deeplabv3', 'hrnetv2_32', output_stride, num_classes, pretrained_backbone=pretrained_backbone)
 
-def deeplabv3_resnet50(num_classes=21, output_stride=8, pretrained_backbone=True):
+def deeplabv3_resnet50(num_classes=21, output_stride=8, pretrained_backbone=True,info_pro_param=None):
     """Constructs a DeepLabV3 model with a ResNet-50 backbone.
 
     Args:
@@ -146,7 +146,7 @@ def deeplabv3_resnet50(num_classes=21, output_stride=8, pretrained_backbone=True
         output_stride (int): output stride for deeplab.
         pretrained_backbone (bool): If True, use the pretrained backbone.
     """
-    return _load_model('deeplabv3', 'resnet50', num_classes, output_stride=output_stride, pretrained_backbone=pretrained_backbone)
+    return _load_model('deeplabv3', 'resnet50', num_classes, output_stride=output_stride, pretrained_backbone=pretrained_backbone,info_pro_param=info_pro_param)
 
 def deeplabv3_resnet101(num_classes=21, output_stride=8, pretrained_backbone=True,info_pro_param=None):
     """Constructs a DeepLabV3 model with a ResNet-101 backbone.
