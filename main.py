@@ -36,7 +36,7 @@ def get_argparser():
                               not (name.startswith("__") or name.startswith('_')) and callable(
                               network.modeling.__dict__[name])
                               )
-    parser.add_argument("--model", type=str, default='deeplabv3_resnet101',
+    parser.add_argument("--model", type=str, default='deeplabv3_resnet50',
                         choices=available_models, help='model name')
     parser.add_argument("--separable_conv", action='store_true', default=False,
                         help="apply separable conv to decoder and aspp")
@@ -381,20 +381,11 @@ def main():
                     loss = criterion(outputs, labels)
                     
                     # 如果有InfoPro损失，先反向传播
-                    if info_losses and 'loss_inter' in info_losses:
-                        info_losses['loss_inter'].backward(retain_graph=True)
-                        
-                        # 记录损失
-                        if (cur_itrs) % 10 == 0:
-                            print(f"Epoch {cur_epochs}, Iter {cur_itrs}/{opts.total_itrs}, "
-                                  f"Loss={loss.item():.4f}, "
-                                  f"Task_Loss={info_losses['loss_task'].item():.4f}, "
-                                  f"Recons_Loss={info_losses['loss_recons'].item():.4f}")
-                    else:
-                        # 没有InfoPro损失，正常记录
-                        if (cur_itrs) % 10 == 0:
-                            print(f"Epoch {cur_epochs}, Iter {cur_itrs}/{opts.total_itrs}, "
-                                  f"Loss={loss.item():.4f}")
+                    if (cur_itrs) % opts.print_interval == 0:
+                        if info_losses:
+                            print(f"Iter {cur_itrs}, Final_Loss={loss.item():.4f}, "
+                                f"Task={info_losses['loss_task'].item():.4f}, "
+                                f"Recons={info_losses['loss_recons'].item():.4f}")
                     
                     # 反向传播主损失
                     loss.backward()
