@@ -30,7 +30,11 @@ class _SimpleSegmentationModel(nn.Module):
             
             # 重建解码器
             self.decoder_inter = nn.Sequential(
-                nn.Conv2d(1024, 128, kernel_size=1),
+                nn.Conv2d(1024, 256, kernel_size=1),
+                nn.BatchNorm2d(256),
+                nn.ReLU(),
+                nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+                nn.Conv2d(256, 128, kernel_size=3, stride=1, padding=1),
                 nn.BatchNorm2d(128),
                 nn.ReLU(),
                 nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
@@ -88,14 +92,20 @@ class _SimpleSegmentationModel(nn.Module):
                 # 重建损失
                 recons = self.decoder_inter(x_inter)
                 loss_recons = self.bce_loss(recons, ini_image) * self.loss_recons
-                
+                loss_inter = loss_task + loss_recons
                 # 存储损失
+                loss_inter.backward()  # 立即释放计算图
+                
+                # 保存损失用于监控（使用detach避免保留梯度）
                 self.info_losses = {
-                    'loss_task': loss_task,
-                    'loss_recons': loss_recons,
-                    'loss_inter': loss_task + loss_recons
+                    'loss_task': loss_task.detach(),
+                    'loss_recons': loss_recons.detach(), 
+                    'loss_inter': loss_inter.detach()
                 }
                 
+                del scale_pred, recons, ini_image, loss_task, loss_recons, loss_inter
+
+
                 # 断开梯度，继续第二部分
                 x_inter_detached = x_inter.detach()
                 features = self.backbone.forward_train2(x_inter_detached)
@@ -148,24 +158,26 @@ class IntermediateLayerGetter(nn.ModuleDict):
     def forward(self, x):
         out = OrderedDict()
         for name, module in self.items():  # self.named_children() 也行
-            if self.hrnet_flag and name.startswith('transition'):
-                if name == 'transition1':
-                    x = [m(x) for m in module]
-                else:
-                    x.append(module(x[-1]))
-            else:
-                x = module(x)
+            if name != 'orig_model':
 
-            if name in self.return_layers:
-                out_name = self.return_layers[name]
-                if self.hrnet_flag and name == 'stage4':          # HRNet cat
-                    h, w = x[0].shape[2:]
-                    ups = [F.interpolate(t, size=(h, w),
-                                          mode='bilinear',
-                                          align_corners=False)
-                           for t in x[1:]]
-                    x = torch.cat([x[0], *ups], dim=1)
-                out[out_name] = x
+                if self.hrnet_flag and name.startswith('transition'):
+                    if name == 'transition1':
+                        x = [m(x) for m in module]
+                    else:
+                        x.append(module(x[-1]))
+                else:
+                    x = module(x)
+
+                if name in self.return_layers:
+                    out_name = self.return_layers[name]
+                    if self.hrnet_flag and name == 'stage4':          # HRNet cat
+                        h, w = x[0].shape[2:]
+                        ups = [F.interpolate(t, size=(h, w),
+                                            mode='bilinear',
+                                            align_corners=False)
+                            for t in x[1:]]
+                        x = torch.cat([x[0], *ups], dim=1)
+                    out[out_name] = x
         return out
 
     # -------------------- InfoPro 前半段 --------------------
