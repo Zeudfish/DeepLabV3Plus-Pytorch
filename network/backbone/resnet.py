@@ -214,12 +214,10 @@ class ResNet(nn.Module):
 
 def forward_train1(self, x):
     """InfoPro第一部分前向传播"""
-    if self.deep_stem:
-        x = self.stem(x)
-    else:
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
+
+    x = self.conv1(x)
+    x = self.bn1(x)
+    x = self.relu(x)
     x = self.maxpool(x)
     
     x = self.layer1(x)
@@ -228,7 +226,7 @@ def forward_train1(self, x):
     # 对于ResNet-101，layer3有23个block
     # 在中间位置分割（前13个blocks）
     if hasattr(self.layer3, '__len__'):
-        for i in range(min(13, len(self.layer3))):
+        for i in range(min(3, len(self.layer3))):
             x = self.layer3[i](x)
     else:
         x = self.layer3(x)
@@ -238,8 +236,8 @@ def forward_train1(self, x):
 def forward_train2(self, x):
     """InfoPro第二部分前向传播"""
     # 继续剩余的layer3 blocks
-    if hasattr(self.layer3, '__len__') and len(self.layer3) > 13:
-        for i in range(13, len(self.layer3)):
+    if hasattr(self.layer3, '__len__') and len(self.layer3) > 3:
+        for i in range(3, len(self.layer3)):
             x = self.layer3[i](x)
     
     x = self.layer4(x)
@@ -384,3 +382,5 @@ def wide_resnet101_2(pretrained=False, progress=True, **kwargs):
     kwargs['width_per_group'] = 64 * 2
     return _resnet('wide_resnet101_2', Bottleneck, [3, 4, 23, 3],
                    pretrained, progress, **kwargs)
+ResNet.forward_train1 = forward_train1
+ResNet.forward_train2 = forward_train2
